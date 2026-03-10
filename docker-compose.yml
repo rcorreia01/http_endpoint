@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: chirpstack-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: chirpstack
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  flask-server:
+    build: ./Flask
+    container_name: chirpstack-flask
+    restart: always
+    depends_on:
+      - postgres
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: chirpstack
+      DB_USER: postgres
+      DB_PASSWORD: mysecretpassword
+    ports:
+      - "5000:5000"
+
+volumes:
+  postgres_data:
