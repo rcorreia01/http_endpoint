@@ -24,28 +24,31 @@ conn = psycopg2.connect(
 def uplink():
     data = request.get_json()
 
-    # Extract relevant fields
-    dev_eui = data.get("deviceInfo", {}).get("devEui")
-    timestamp = data.get("time")
-    decoded = data.get("object", {})
-    temperature = decoded.get("temperature")
-    humidity = decoded.get("humidity")
+    # LoRaWAN metadata
+    dev_eui   = data.get("deviceInfo", {}).get("devEui")
+    timestamp = data.get("time")                        # network-server reception time
 
-    # Optional: take first gateway RSSI/SNR
+    # Decoded payload (populated by decoder.js in TTN/Chirpstack)
+    decoded        = data.get("object", {})
+    type_code      = decoded.get("type_code")           # raw number — you decode it later
+    azimuth        = decoded.get("azimuth")
+    node_timestamp = decoded.get("secs_since_midnight")
+
+    # Gateway radio stats (first gateway wins)
     rx_info = data.get("rxInfo", [])
     rssi = snr = None
     if rx_info:
         rssi = rx_info[0].get("rssi")
-        snr = rx_info[0].get("snr")
+        snr  = rx_info[0].get("snr")
 
-    # Insert into PostgreSQL
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO sensor_data (dev_eui, timestamp, temperature, humidity, rssi, snr)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO observations
+                (dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (dev_eui, timestamp, temperature, humidity, rssi, snr)
+            (dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr)
         )
         conn.commit()
 
