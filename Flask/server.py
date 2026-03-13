@@ -22,6 +22,12 @@ conn = psycopg2.connect(
 
 @app.route("/uplink", methods=["POST"])
 def uplink():
+    # ChirpStack sends all event types (up, status, join, ack, txack, log, location)
+    # to the same URL. We only care about uplink data events.
+    event = request.args.get("event")
+    if event != "up":
+        return jsonify({"status": "ignored", "event": event}), 200
+
     data = request.get_json()
 
     # LoRaWAN metadata
