@@ -17,8 +17,8 @@
             height: 100vh;
             width: 100vw;
         }
-        /* Custom map control for centering */
-        .leaflet-control-center-location {
+        /* Custom map control for sidebar */
+        .leaflet-control-sidebar-toggle {
             background-color: white;
             border: 2px solid rgba(0,0,0,0.2);
             border-radius: 4px;
@@ -31,14 +31,104 @@
             font-size: 18px;
             background-clip: padding-box;
         }
-        .leaflet-control-center-location:hover {
+        .leaflet-control-sidebar-toggle:hover {
             background-color: #f4f4f4;
+        }
+        
+        /* Sidebar styling */
+        #map-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+        #sidebar {
+            position: absolute;
+            top: 0;
+            right: -300px;
+            width: 300px;
+            height: 100vh;
+            background: white;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.2);
+            z-index: 1000;
+            transition: right 0.3s;
+            display: flex;
+            flex-direction: column;
+        }
+        #sidebar.open {
+            right: 0;
+        }
+        .sidebar-header {
+            padding: 15px;
+            background: #2196F3;
+            color: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .sidebar-close {
+            cursor: pointer;
+            font-size: 20px;
+        }
+        .node-list {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 15px;
+        }
+        .node-item {
+            background: #f9f9f9;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .node-item h4 {
+            margin: 0 0 5px 0;
+            font-size: 14px;
+        }
+        .node-actions {
+            display: flex;
+            gap: 5px;
+            margin-top: 8px;
+        }
+        .node-actions button {
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            background: white;
+            border-radius: 3px;
+        }
+        .node-actions button:hover {
+            background: #eee;
+        }
+        
+        /* Tooltip styling */
+        .node-tooltip {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            font-weight: bold;
+            color: #333;
+            text-shadow: 1px 1px 2px white, -1px -1px 2px white, 1px -1px 2px white, -1px 1px 2px white;
         }
     </style>
 </head>
 <body>
 
-<div id="map"></div>
+<div id="map-container">
+    <div id="map"></div>
+    <div id="sidebar">
+        <div class="sidebar-header">
+            <h3 style="margin: 0; font-size: 16px;">Registered Nodes</h3>
+            <span class="sidebar-close" onclick="toggleSidebar()">✕</span>
+        </div>
+        <div class="node-list" id="nodeList">
+            <!-- Nodes dynamically injected here by JS -->
+        </div>
+    </div>
+</div>
 
 <!-- Leaflet JS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -54,23 +144,114 @@
 
     let popup = L.popup();
 
+    // Store references to map objects for hiding/showing/updating
+    const nodeObjects = {};
+    const nodesData = [];
+    
+    // Manage state for adding vs editing
+    let currentEditEui = null;
+
     // Function to draw a node on the map
-    function drawNode(lat, lng, radius, dev_eui) {
-        // Draw the center dot (the gateway location)
-        L.circleMarker([lat, lng], {
+    function drawNode(node) {
+        // Clear existing objects for this node if they exist (for updates)
+        if (nodeObjects[node.dev_eui]) {
+            map.removeLayer(nodeObjects[node.dev_eui].marker);
+            map.removeLayer(nodeObjects[node.dev_eui].circle);
+            if (nodeObjects[node.dev_eui].tooltip) {
+                map.removeLayer(nodeObjects[node.dev_eui].tooltip);
+            }
+        }
+
+        // Draw the center dot
+        const marker = L.circleMarker([node.latitude, node.longitude], {
             color: 'purple',
             fillColor: 'purple',
             fillOpacity: 1.0,
-            radius: 4 // fixed pixel size for the center dot
-        }).addTo(map).bindPopup(`<b>Device EUI:</b> ${dev_eui}<br><b>Range:</b> ${radius}m`);
+            radius: 4
+        }).addTo(map).bindPopup(`<b>Name:</b> ${node.name || 'Unnamed'}<br><b>Device EUI:</b> ${node.dev_eui}<br><b>Range:</b> ${node.range}m`);
 
-        // Draw the actual range circle (in meters)
-        L.circle([lat, lng], {
+        // Draw permanent name tooltip
+        let tooltip = null;
+        if (node.name) {
+             tooltip = marker.bindTooltip(node.name, {
+                 permanent: true, 
+                 direction: 'top',
+                 className: 'node-tooltip',
+                 offset: [0, -5]
+             });
+        }
+
+        // Draw the range circle
+        const circle = L.circle([node.latitude, node.longitude], {
             color: 'yellow',
             fillColor: 'yellow',
             fillOpacity: 0.3,
-            radius: parseFloat(radius) 
+            radius: parseFloat(node.range) 
         }).addTo(map);
+
+        nodeObjects[node.dev_eui] = { marker, circle, tooltip, is_hidden: false };
+    }
+
+    // Render the sidebar list
+    function renderSidebar() {
+        const listDiv = document.getElementById('nodeList');
+        listDiv.innerHTML = '';
+        
+        nodesData.forEach(node => {
+            const isHidden = nodeObjects[node.dev_eui]?.is_hidden;
+            
+            const item = document.createElement('div');
+            item.className = 'node-item';
+            item.innerHTML = `
+                <h4>${node.name || 'Unnamed Node'}</h4>
+                <div style="font-size: 11px; color: #666;">EUI: ${node.dev_eui}</div>
+                <div class="node-actions">
+                    <button onclick="centerOnNode('${node.dev_eui}')">📍 Center</button>
+                    <button onclick="toggleNodeVisibility('${node.dev_eui}')">${isHidden ? '👁️ Show' : '🙈 Hide'}</button>
+                    <button onclick="editNode('${node.dev_eui}')">✏️ Edit</button>
+                </div>
+            `;
+            listDiv.appendChild(item);
+        });
+    }
+
+    // Sidebar action functions
+    window.centerOnNode = function(dev_eui) {
+        const node = nodesData.find(n => n.dev_eui === dev_eui);
+        if(node) {
+            map.flyTo([node.latitude, node.longitude], 15);
+        }
+    };
+
+    window.toggleNodeVisibility = function(dev_eui) {
+        const objs = nodeObjects[dev_eui];
+        if(!objs) return;
+        
+        if(objs.is_hidden) {
+            objs.marker.addTo(map);
+            objs.circle.addTo(map);
+            objs.is_hidden = false;
+        } else {
+            map.removeLayer(objs.marker);
+            map.removeLayer(objs.circle);
+            objs.is_hidden = true;
+        }
+        renderSidebar();
+    };
+
+    window.editNode = function(dev_eui) {
+        const node = nodesData.find(n => n.dev_eui === dev_eui);
+        if(!node) return;
+        
+        currentEditEui = dev_eui;
+        // Open a popup to edit at its current location
+        openFormPopup(node.latitude, node.longitude, node);
+        
+        alert("Edit mode active. You can fill out the form, or click anywhere else on the map to move it.");
+    };
+
+    function toggleSidebar() {
+        document.getElementById('sidebar').classList.toggle('open');
     }
 
     // Fetch existing nodes from the API and draw them
@@ -79,63 +260,77 @@
         .then(nodes => {
             if(Array.isArray(nodes)) {
                 nodes.forEach(node => {
-                    drawNode(node.latitude, node.longitude, node.range, node.dev_eui);
+                    nodesData.push(node);
+                    drawNode(node);
                 });
+                renderSidebar();
             }
         })
         .catch(err => console.error("Error fetching nodes:", err));
 
-    // Handle map clicks to add a new node
-    map.on('click', function(e) {
-        const lat = e.latlng.lat;
-        const lng = e.latlng.lng;
-
-        // HTML content for the popup form
+    function openFormPopup(lat, lng, editNodeData = null) {
+        const isEdit = editNodeData !== null;
+        const defaultEui = isEdit ? editNodeData.dev_eui : '';
+        const defaultName = isEdit ? (editNodeData.name || '') : '';
+        const defaultRange = isEdit ? editNodeData.range : '';
+        const defaultAltitude = isEdit ? (editNodeData.altitude || 0) : 0;
+        
         const popupContent = `
-            <div style="min-width: 200px;">
-                <h3 style="margin-top:0;">Add New Node</h3>
-                <form id="addNodeForm">
-                    <label>Device EUI:</label><br>
-                    <input type="text" id="devEui" required pattern="[A-Fa-f0-9]{16}" title="16 character Hex EUI" style="width: 100%; margin-bottom: 5px;"><br>
-                    
-                    <label>Range (meters):</label><br>
-                    <input type="number" id="nodeRange" required min="1" style="width: 100%; margin-bottom: 5px;"><br>
-                    
-                    <label>Altitude (meters, optional):</label><br>
-                    <input type="number" id="nodeAltitude" value="0" style="width: 100%; margin-bottom: 10px;"><br>
-                    
-                    <button type="submit" style="width: 100%; padding: 5px; background-color: purple; color: white; border: none; cursor: pointer;">Place Node</button>
-                </form>
+            <div style="font-family: Arial, sans-serif; font-size: 14px;">
+                <h3 style="margin-top: 0;">${isEdit ? 'Edit Node' : 'Add New Node'}</h3>
+                ${!isEdit ? `
+                <label><b>Device EUI:</b></label><br>
+                <input type="text" id="devEui" placeholder="e.g. 0011223344556677" style="width: 100%; margin-bottom: 10px;" value="${defaultEui}"><br>
+                ` : `<div style="margin-bottom: 10px;"><b>Device EUI:</b> ${defaultEui}</div>`}
+                
+                <label><b>Name:</b></label><br>
+                <input type="text" id="nodeName" placeholder="e.g. Campus Roof" style="width: 100%; margin-bottom: 10px;" value="${defaultName}"><br>
+                
+                <label><b>Range (meters):</b></label><br>
+                <input type="number" id="nodeRange" placeholder="e.g. 5000" style="width: 100%; margin-bottom: 10px;" value="${defaultRange}"><br>
+
+                <label><b>Altitude (meters, optional):</b></label><br>
+                <input type="number" id="nodeAltitude" placeholder="e.g. 10" style="width: 100%; margin-bottom: 15px;" value="${defaultAltitude}"><br>
+                
+                <button id="saveNodeBtn" style="padding: 5px 10px; cursor: pointer;">${isEdit ? 'Save Changes' : 'Save Node'}</button>
+                ${isEdit ? `<button onclick="window.currentEditEui = null; map.closePopup();" style="padding: 5px 10px; cursor: pointer; float:right;">Cancel</button>` : ''}
             </div>
         `;
 
-        // Open popup at the clicked location
-        popup
-            .setLatLng(e.latlng)
+        const popup = L.popup()
+            .setLatLng([lat, lng])
             .setContent(popupContent)
             .openOn(map);
 
-        // Add event listener to the form AFTER it is injected into the DOM
+        // Add event listener to the save button inside the popup
         setTimeout(() => {
-            const form = document.getElementById('addNodeForm');
-            if(form) {
-                form.addEventListener('submit', function(event) {
-                    event.preventDefault();
-                    
-                    const devEui = document.getElementById('devEui').value;
+            const btn = document.getElementById('saveNodeBtn');
+            if (btn) {
+                btn.addEventListener('click', () => {
+                    const devEui = isEdit ? editNodeData.dev_eui : document.getElementById('devEui').value;
+                    const name = document.getElementById('nodeName').value;
                     const range = document.getElementById('nodeRange').value;
                     const altitude = document.getElementById('nodeAltitude').value || 0;
 
+                    if (!devEui || !range) {
+                        alert("Device EUI and Range are required!");
+                        return;
+                    }
+
                     const payload = {
                         dev_eui: devEui,
+                        name: name,
                         latitude: lat,
                         longitude: lng,
-                        altitude: parseFloat(altitude),
-                        range: parseFloat(range)
+                        altitude: parseFloat(altitude), 
+                        range: range
                     };
 
-                    fetch('/nodes', {
-                        method: 'POST',
+                    const endpoint = isEdit ? `/nodes/${devEui}` : '/nodes';
+                    const method = isEdit ? 'PUT' : 'POST';
+
+                    fetch(endpoint, {
+                        method: method,
                         headers: {
                             'Content-Type': 'application/json'
                         },
@@ -143,105 +338,68 @@
                     })
                     .then(response => response.json())
                     .then(data => {
-                        if(data.status === 'ok' || data.status === 'error') {
-                            if(data.status === 'ok') {
-                                // Draw it immediately
-                                drawNode(lat, lng, range, devEui);
-                                map.closePopup();
+                        if(data.status === 'ok') {
+                            if(isEdit) {
+                                // Update existing
+                                const idx = nodesData.findIndex(n => n.dev_eui === devEui);
+                                if(idx !== -1) nodesData[idx] = payload;
+                                currentEditEui = null;
                             } else {
-                                alert("Failed to add node: " + data.message);
+                                // Push new
+                                nodesData.push(payload);
                             }
+                            drawNode(payload);
+                            renderSidebar();
+                            map.closePopup();
+                        } else {
+                            alert(`Failed to ${isEdit ? 'update' : 'add'} node: ` + data.message);
                         }
                     })
                     .catch(error => {
-                        console.error("Error adding node:", error);
+                        console.error(`Error saving node:`, error);
                         alert("An error occurred. Check the console.");
                     });
                 });
             }
         }, 100);
+    }
+
+    // Add click event to map to place/move a node
+    map.on('click', function(e) {
+        const lat = e.latlng.lat;
+        const lng = e.latlng.lng;
+        
+        if(currentEditEui) {
+            // We are moving an existing node
+            const node = nodesData.find(n => n.dev_eui === currentEditEui);
+            openFormPopup(lat, lng, node);
+        } else {
+            // Adding a brand new node
+            openFormPopup(lat, lng, null);
+        }
     });
 
-    // --- User Geolocation Feature ---
-    let userMarker = null;
-    let userRadius = null;
+    // --- User Geolocation Feature --- Removed
 
-    // Turn on map locater
-    map.locate({setView: false, maxZoom: 16, watch: true, enableHighAccuracy: true});
-
-    function onLocationFound(e) {
-        const radius = e.accuracy / 2;
-
-        if (!userMarker) {
-            // Create marker for the first time
-            userMarker = L.circleMarker(e.latlng, {
-                color: '#2196F3',
-                fillColor: '#2196F3',
-                fillOpacity: 0.8,
-                radius: 6 // fixed pixel radius
-            }).addTo(map).bindPopup("You are within " + Math.round(radius) + " meters from this point");
-            
-            userRadius = L.circle(e.latlng, radius, {
-                color: '#2196F3',
-                fillColor: '#2196F3',
-                fillOpacity: 0.1,
-                stroke: false
-            }).addTo(map);
-
-            // Optional: center map on user on first load
-            map.flyTo(e.latlng, 14);
-        } else {
-            // Update existing marker position
-            userMarker.setLatLng(e.latlng);
-            userRadius.setLatLng(e.latlng);
-            userRadius.setRadius(radius);
-            userMarker.getPopup().setContent("You are within " + Math.round(radius) + " meters from this point");
-        }
-    }
-
-    function onLocationError(e) {
-        console.warn("Location error:", e.message);
-        let reason = e.message;
-        
-        // Browsers block Geolocation API if not served over HTTPS (unless it's localhost)
-        if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-            reason = "Browsers require HTTPS to use the Geolocation API on remote devices. You are currently using HTTP.";
-        }
-        
-        // We only want to alert the user once if it fails to automatically locate
-        if (!window.locationErrorAlerted) {
-             alert("Could not find your location: " + reason + "\n\nPlease check your browser's site settings and ensure location permissions are granted.");
-             window.locationErrorAlerted = true;
-        }
-    }
-
-    map.on('locationfound', onLocationFound);
-    map.on('locationerror', onLocationError);
-
-    // Add a custom control button to center map on user
-    L.Control.CenterLocation = L.Control.extend({
+    // Add sidebar toggle control button
+    L.Control.SidebarToggle = L.Control.extend({
         options: {
-            position: 'topleft' // Below zoom controls by default
+            position: 'topright'
         },
         onAdd: function(map) {
-            const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-center-location');
-            container.innerHTML = '📍'; // simple emoji icon, or use FontAwesome
-            container.title = "Center on my location";
+            const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-sidebar-toggle');
+            container.innerHTML = '☰'; // Hamburger menu icon
+            container.title = "Toggle Nodes Sidebar";
 
-            container.onclick = function() {
-                if (userMarker) {
-                    map.flyTo(userMarker.getLatLng(), 16);
-                } else {
-                    // Try to locate them again
-                    map.locate({setView: false, enableHighAccuracy: true});
-                    alert("Attempting to find your location again. Please ensure location services are allowed for this site in your browser settings.");
-                }
+            container.onclick = function(e) {
+                e.stopPropagation();
+                toggleSidebar();
             }
             return container;
         }
     });
-
-    map.addControl(new L.Control.CenterLocation());
+    
+    map.addControl(new L.Control.SidebarToggle());
 
 </script>
 </body>

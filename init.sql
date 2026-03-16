@@ -5,6 +5,7 @@
 
 CREATE TABLE IF NOT EXISTS nodes (
     dev_eui          VARCHAR(16) PRIMARY KEY,
+    name             VARCHAR(255),
     latitude         REAL NOT NULL,
     longitude        REAL NOT NULL,
     altitude         REAL DEFAULT 0,

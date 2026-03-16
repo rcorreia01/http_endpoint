@@ -32,17 +32,18 @@ def get_nodes():
         if not conn or not cursor:
             return jsonify({"status": "error", "message": "Database connection failed"}), 500
 
-        cursor.execute("SELECT dev_eui, latitude, longitude, altitude, range FROM nodes")
+        cursor.execute("SELECT dev_eui, name, latitude, longitude, altitude, range FROM nodes")
         rows = cursor.fetchall()
         
         nodes = []
         for row in rows:
             nodes.append({
                 "dev_eui": row[0],
-                "latitude": row[1],
-                "longitude": row[2],
-                "altitude": row[3],
-                "range": row[4]
+                "name": row[1],
+                "latitude": row[2],
+                "longitude": row[3],
+                "altitude": row[4],
+                "range": row[5]
             })
         return jsonify(nodes), 200
     except Exception as e:
@@ -58,6 +59,7 @@ def get_nodes():
 def create_node():
     data = request.get_json()
     dev_eui = data.get("dev_eui")
+    name = data.get("name")
     latitude = data.get("latitude")
     longitude = data.get("longitude")
     altitude = data.get("altitude", 0)
@@ -74,10 +76,10 @@ def create_node():
 
         cursor.execute(
             """
-            INSERT INTO nodes (dev_eui, latitude, longitude, altitude, range)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO nodes (dev_eui, name, latitude, longitude, altitude, range)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (dev_eui, latitude, longitude, altitude, node_range)
+            (dev_eui, name, latitude, longitude, altitude, node_range)
         )
         conn.commit()
     except Exception as e:
@@ -90,6 +92,48 @@ def create_node():
             close_db_connection(cursor, conn)
 
     return jsonify({"status": "ok"}), 201
+
+@app.route("/nodes/<dev_eui>", methods=["PUT"])
+def update_node(dev_eui):
+    data = request.get_json()
+    name = data.get("name")
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    altitude = data.get("altitude", 0)
+    node_range = data.get("range")
+
+    if not all([latitude, longitude, node_range]):
+         return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+    cursor, conn = None, None
+    try:
+        cursor, conn = connect_to_database()
+        if not conn or not cursor:
+            return jsonify({"status": "error", "message": "Database connection failed"}), 500
+
+        cursor.execute(
+            """
+            UPDATE nodes 
+            SET name=%s, latitude=%s, longitude=%s, altitude=%s, range=%s
+            WHERE dev_eui=%s
+            """,
+            (name, latitude, longitude, altitude, node_range, dev_eui)
+        )
+        
+        if cursor.rowcount == 0:
+            return jsonify({"status": "error", "message": "Node not found"}), 404
+            
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        app.logger.error(f"DB update failed, rolled back: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor and conn:
+            close_db_connection(cursor, conn)
+
+    return jsonify({"status": "ok"}), 200
 
 @app.route("/uplink", methods=["POST"])
 def uplink():
