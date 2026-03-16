@@ -1,0 +1,33 @@
+# Python artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv
+venv/
+.python-version
+
+# Logs and runtime data
+*.log
+
+# Plots
+
+# Git
+.git
+.gitignore
+
+# Docker metadata (no need to carry these inside the image)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Editors
+.idea
+.vscode
+
+# Docs
+README.md
+config.yaml

@@ -11,11 +11,11 @@ def connect_to_database():
     while tries < max_retries:
         try:
             connection = psycopg2.connect(
-                database=os.getenv('DB_NAME'),
-                user=os.getenv('DB_USER'),
-                password=os.getenv('DB_PASSWORD'),
-                host=os.getenv('DB_HOST'),
-                port=os.getenv('DB_PORT')
+                database=os.getenv('POSTGRES_DB'),
+                user=os.getenv('POSTGRES_USER'),
+                password=os.getenv('POSTGRES_PASSWORD'),
+                host=os.getenv('POSTGRES_HOST'),
+                port=os.getenv('POSTGRES_PORT')
                 )
             cursor = connection.cursor()
             #print("Successfully connected to the database!")
@@ -40,8 +40,8 @@ def close_db_connection(cursor, connection):
     connection.close()
 
 if __name__ == "__main__":
-    os.environ['DB_HOST'] = 'localhost'
-    os.environ['DB_PORT'] = '5432'
+    os.environ['POSTGRES_HOST'] = 'localhost'
+    os.environ['POSTGRES_PORT'] = '5432'
     # Connect to the database
     cursor, connection = connect_to_database()
     # Close the database connection

@@ -1,24 +1,10 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 import psycopg2
 from psycopg2.extras import execute_values
 import os
+from database import connect_to_database, close_db_connection
 
 app = Flask(__name__)
-
-# PostgreSQL connection settings
-DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
-DB_PORT = os.getenv("POSTGRES_PORT", "5432")
-DB_NAME = os.getenv("POSTGRES_DB", "chirpstack")
-DB_USER = os.getenv("POSTGRES_USER", "postgres")
-DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
-
-conn = psycopg2.connect(
-    host=DB_HOST,
-    port=DB_PORT,
-    dbname=DB_NAME,
-    user=DB_USER,
-    password=DB_PASSWORD
-)
 
 @app.route("/", methods=["GET"])
 def index():
@@ -33,6 +19,77 @@ def index():
         "description": "Flask API for handling Chirpstack integrations",
         "endpoints": endpoints
     }), 200
+
+@app.route("/map", methods=["GET"])
+def map_view():
+    return render_template("map.html")
+
+@app.route("/nodes", methods=["GET"])
+def get_nodes():
+    cursor, conn = None, None
+    try:
+        cursor, conn = connect_to_database()
+        if not conn or not cursor:
+            return jsonify({"status": "error", "message": "Database connection failed"}), 500
+
+        cursor.execute("SELECT dev_eui, latitude, longitude, altitude, range FROM nodes")
+        rows = cursor.fetchall()
+        
+        nodes = []
+        for row in rows:
+            nodes.append({
+                "dev_eui": row[0],
+                "latitude": row[1],
+                "longitude": row[2],
+                "altitude": row[3],
+                "range": row[4]
+            })
+        return jsonify(nodes), 200
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        app.logger.error(f"Error fetching nodes: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor and conn:
+            close_db_connection(cursor, conn)
+
+@app.route("/nodes", methods=["POST"])
+def create_node():
+    data = request.get_json()
+    dev_eui = data.get("dev_eui")
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    altitude = data.get("altitude", 0)
+    node_range = data.get("range")
+
+    if not all([dev_eui, latitude, longitude, node_range]):
+         return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+    cursor, conn = None, None
+    try:
+        cursor, conn = connect_to_database()
+        if not conn or not cursor:
+            return jsonify({"status": "error", "message": "Database connection failed"}), 500
+
+        cursor.execute(
+            """
+            INSERT INTO nodes (dev_eui, latitude, longitude, altitude, range)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (dev_eui, latitude, longitude, altitude, node_range)
+        )
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        app.logger.error(f"DB insert failed, rolled back: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor and conn:
+            close_db_connection(cursor, conn)
+
+    return jsonify({"status": "ok"}), 201
 
 @app.route("/uplink", methods=["POST"])
 def uplink():
@@ -61,21 +118,29 @@ def uplink():
         rssi = rx_info[0].get("rssi")
         snr  = rx_info[0].get("snr")
 
+    cursor, conn = None, None
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO detections
-                    (dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
+        cursor, conn = connect_to_database()
+        if not conn or not cursor:
+            return jsonify({"status": "error", "message": "Database connection failed"}), 500
+
+        cursor.execute(
+            """
+            INSERT INTO detections
                 (dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr)
-            )
-            conn.commit()
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr)
+        )
+        conn.commit()
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         app.logger.error(f"DB insert failed, rolled back: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor and conn:
+            close_db_connection(cursor, conn)
 
     return jsonify({"status": "ok"}), 200
 

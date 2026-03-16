@@ -1,12 +1,14 @@
-FROM python:3.11-slim
-
+# Stage 1: builder
+FROM python:3.11-slim AS builder
 WORKDIR /app
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-COPY server.py .
-
+# Stage 2: final image — no build tools
+FROM python:3.11-slim
+COPY --from=builder /install /usr/local
+WORKDIR /app
+COPY . .
 EXPOSE 5000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "server:app"]
+ENTRYPOINT ["/bin/sh", "-c", "gunicorn --bind 0.0.0.0:5000 server:app"]

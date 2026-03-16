@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DIVS Gateway - Node Map</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            height: 100vh;
+            width: 100vw;
+        }
+        /* Custom map control for centering */
+        .leaflet-control-center-location {
+            background-color: white;
+            border: 2px solid rgba(0,0,0,0.2);
+            border-radius: 4px;
+            cursor: pointer;
+            width: 34px;
+            height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            background-clip: padding-box;
+        }
+        .leaflet-control-center-location:hover {
+            background-color: #f4f4f4;
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+    // Initialize the map, centered globally
+    const map = L.map('map').setView([20, 0], 2);
+
+    // Add OpenStreetMap tiles
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    let popup = L.popup();
+
+    // Function to draw a node on the map
+    function drawNode(lat, lng, radius, dev_eui) {
+        // Draw the center dot (the gateway location)
+        L.circleMarker([lat, lng], {
+            color: 'purple',
+            fillColor: 'purple',
+            fillOpacity: 1.0,
+            radius: 4 // fixed pixel size for the center dot
+        }).addTo(map).bindPopup(`<b>Device EUI:</b> ${dev_eui}<br><b>Range:</b> ${radius}m`);
+
+        // Draw the actual range circle (in meters)
+        L.circle([lat, lng], {
+            color: 'yellow',
+            fillColor: 'yellow',
+            fillOpacity: 0.3,
+            radius: parseFloat(radius) 
+        }).addTo(map);
+    }
+
+    // Fetch existing nodes from the API and draw them
+    fetch('/nodes')
+        .then(response => response.json())
+        .then(nodes => {
+            if(Array.isArray(nodes)) {
+                nodes.forEach(node => {
+                    drawNode(node.latitude, node.longitude, node.range, node.dev_eui);
+                });
+            }
+        })
+        .catch(err => console.error("Error fetching nodes:", err));
+
+    // Handle map clicks to add a new node
+    map.on('click', function(e) {
+        const lat = e.latlng.lat;
+        const lng = e.latlng.lng;
+
+        // HTML content for the popup form
+        const popupContent = `
+            <div style="min-width: 200px;">
+                <h3 style="margin-top:0;">Add New Node</h3>
+                <form id="addNodeForm">
+                    <label>Device EUI:</label><br>
+                    <input type="text" id="devEui" required pattern="[A-Fa-f0-9]{16}" title="16 character Hex EUI" style="width: 100%; margin-bottom: 5px;"><br>
+                    
+                    <label>Range (meters):</label><br>
+                    <input type="number" id="nodeRange" required min="1" style="width: 100%; margin-bottom: 5px;"><br>
+                    
+                    <label>Altitude (meters, optional):</label><br>
+                    <input type="number" id="nodeAltitude" value="0" style="width: 100%; margin-bottom: 10px;"><br>
+                    
+                    <button type="submit" style="width: 100%; padding: 5px; background-color: purple; color: white; border: none; cursor: pointer;">Place Node</button>
+                </form>
+            </div>
+        `;
+
+        // Open popup at the clicked location
+        popup
+            .setLatLng(e.latlng)
+            .setContent(popupContent)
+            .openOn(map);
+
+        // Add event listener to the form AFTER it is injected into the DOM
+        setTimeout(() => {
+            const form = document.getElementById('addNodeForm');
+            if(form) {
+                form.addEventListener('submit', function(event) {
+                    event.preventDefault();
+                    
+                    const devEui = document.getElementById('devEui').value;
+                    const range = document.getElementById('nodeRange').value;
+                    const altitude = document.getElementById('nodeAltitude').value || 0;
+
+                    const payload = {
+                        dev_eui: devEui,
+                        latitude: lat,
+                        longitude: lng,
+                        altitude: parseFloat(altitude),
+                        range: parseFloat(range)
+                    };
+
+                    fetch('/nodes', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if(data.status === 'ok' || data.status === 'error') {
+                            if(data.status === 'ok') {
+                                // Draw it immediately
+                                drawNode(lat, lng, range, devEui);
+                                map.closePopup();
+                            } else {
+                                alert("Failed to add node: " + data.message);
+                            }
+                        }
+                    })
+                    .catch(error => {
+                        console.error("Error adding node:", error);
+                        alert("An error occurred. Check the console.");
+                    });
+                });
+            }
+        }, 100);
+    });
+
+    // --- User Geolocation Feature ---
+    let userMarker = null;
+    let userRadius = null;
+
+    // Turn on map locater
+    map.locate({setView: false, maxZoom: 16, watch: true, enableHighAccuracy: true});
+
+    function onLocationFound(e) {
+        const radius = e.accuracy / 2;
+
+        if (!userMarker) {
+            // Create marker for the first time
+            userMarker = L.circleMarker(e.latlng, {
+                color: '#2196F3',
+                fillColor: '#2196F3',
+                fillOpacity: 0.8,
+                radius: 6 // fixed pixel radius
+            }).addTo(map).bindPopup("You are within " + Math.round(radius) + " meters from this point");
+            
+            userRadius = L.circle(e.latlng, radius, {
+                color: '#2196F3',
+                fillColor: '#2196F3',
+                fillOpacity: 0.1,
+                stroke: false
+            }).addTo(map);
+
+            // Optional: center map on user on first load
+            map.flyTo(e.latlng, 14);
+        } else {
+            // Update existing marker position
+            userMarker.setLatLng(e.latlng);
+            userRadius.setLatLng(e.latlng);
+            userRadius.setRadius(radius);
+            userMarker.getPopup().setContent("You are within " + Math.round(radius) + " meters from this point");
+        }
+    }
+
+    function onLocationError(e) {
+        console.warn("Location error:", e.message);
+        let reason = e.message;
+        
+        // Browsers block Geolocation API if not served over HTTPS (unless it's localhost)
+        if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+            reason = "Browsers require HTTPS to use the Geolocation API on remote devices. You are currently using HTTP.";
+        }
+        
+        // We only want to alert the user once if it fails to automatically locate
+        if (!window.locationErrorAlerted) {
+             alert("Could not find your location: " + reason + "\n\nPlease check your browser's site settings and ensure location permissions are granted.");
+             window.locationErrorAlerted = true;
+        }
+    }
+
+    map.on('locationfound', onLocationFound);
+    map.on('locationerror', onLocationError);
+
+    // Add a custom control button to center map on user
+    L.Control.CenterLocation = L.Control.extend({
+        options: {
+            position: 'topleft' // Below zoom controls by default
+        },
+        onAdd: function(map) {
+            const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-center-location');
+            container.innerHTML = '📍'; // simple emoji icon, or use FontAwesome
+            container.title = "Center on my location";
+
+            container.onclick = function() {
+                if (userMarker) {
+                    map.flyTo(userMarker.getLatLng(), 16);
+                } else {
+                    // Try to locate them again
+                    map.locate({setView: false, enableHighAccuracy: true});
+                    alert("Attempting to find your location again. Please ensure location services are allowed for this site in your browser settings.");
+                }
+            }
+            return container;
+        }
+    });
+
+    map.addControl(new L.Control.CenterLocation());
+
+</script>
+</body>
+</html>
