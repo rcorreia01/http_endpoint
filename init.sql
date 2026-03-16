@@ -14,11 +14,11 @@ CREATE TABLE IF NOT EXISTS nodes (
 
 CREATE TABLE IF NOT EXISTS detections (
     id               SERIAL PRIMARY KEY,
-    dev_eui          VARCHAR(16)  NOT NULL REFERENCES nodes(dev_eui),
+    dev_eui          VARCHAR(16)  NOT NULL,   -- REFERENCES nodes(dev_eui),
     timestamp        TIMESTAMPTZ  NOT NULL,   -- network server reception time
     type_code        SMALLINT     NOT NULL,   -- raw number; decode in app layer
     azimuth          REAL         NOT NULL,   -- degrees, 0.0–359.9
-    node_timestamp   INTEGER,                 -- seconds since midnight UTC (node clock)
+    node_timestamp   INTEGER      NOT NULL,   -- seconds since midnight UTC (node clock)
     rssi             REAL,
     snr              REAL
 );
