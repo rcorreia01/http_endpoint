@@ -4,12 +4,22 @@
 -- timestamp is the network-server reception time (from LoRaWAN metadata).
 
 CREATE TABLE IF NOT EXISTS nodes (
-    dev_eui          VARCHAR(16) PRIMARY KEY,
-    name             VARCHAR(255),
-    latitude         REAL NOT NULL,
-    longitude        REAL NOT NULL,
-    altitude         REAL DEFAULT 0,
-    range            REAL NOT NULL
+    dev_eui VARCHAR(255) PRIMARY KEY,
+    name VARCHAR(255),
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+    altitude DOUBLE PRECISION,
+    range DOUBLE PRECISION,
+    connected_gateway VARCHAR(255) -- Note: No strict FOREIGN KEY constraint allows nodes without gateways
+);
+
+CREATE TABLE IF NOT EXISTS gateways (
+    gateway_id VARCHAR(255) PRIMARY KEY,
+    name VARCHAR(255),
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+    altitude DOUBLE PRECISION,
+    range DOUBLE PRECISION
 );
 
 CREATE TABLE IF NOT EXISTS detections (

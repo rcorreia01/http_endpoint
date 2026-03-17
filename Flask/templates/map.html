@@ -1,26 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DIVS Gateway - Node Map</title>
     <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
     <style>
-        body, html {
+        body,
+        html {
             margin: 0;
             padding: 0;
             height: 100%;
             font-family: Arial, sans-serif;
         }
+
         #map {
             height: 100vh;
             width: 100vw;
         }
+
         /* Custom map control for sidebar */
         .leaflet-control-sidebar-toggle {
             background-color: white;
-            border: 2px solid rgba(0,0,0,0.2);
+            border: 2px solid rgba(0, 0, 0, 0.2);
             border-radius: 4px;
             cursor: pointer;
             width: 34px;
@@ -31,10 +36,11 @@
             font-size: 18px;
             background-clip: padding-box;
         }
+
         .leaflet-control-sidebar-toggle:hover {
             background-color: #f4f4f4;
         }
-        
+
         /* Sidebar styling */
         #map-container {
             display: flex;
@@ -43,6 +49,7 @@
             overflow: hidden;
             position: relative;
         }
+
         #sidebar {
             position: absolute;
             top: 0;
@@ -50,15 +57,17 @@
             width: 300px;
             height: 100vh;
             background: white;
-            box-shadow: -2px 0 5px rgba(0,0,0,0.2);
+            box-shadow: -2px 0 5px rgba(0, 0, 0, 0.2);
             z-index: 1000;
             transition: right 0.3s;
             display: flex;
             flex-direction: column;
         }
+
         #sidebar.open {
             right: 0;
         }
+
         .sidebar-header {
             padding: 15px;
             background: #2196F3;
@@ -67,31 +76,45 @@
             justify-content: space-between;
             align-items: center;
         }
+
         .sidebar-close {
             cursor: pointer;
             font-size: 20px;
         }
+
         .node-list {
             flex-grow: 1;
             overflow-y: auto;
             padding: 15px;
         }
+
         .node-item {
             background: #f9f9f9;
-            padding: 10px;
-            margin-bottom: 10px;
+            padding: 5px 10px;
+            cursor: pointer;
             border-radius: 4px;
-            border: 1px solid #ddd;
+            font-size: 11px;
         }
+        
+        button.action-btn {
+            padding: 3px 6px;
+        }
+
+        .leaflet-popup-content {
+            font-size: 14px;
+        }
+
         .node-item h4 {
             margin: 0 0 5px 0;
             font-size: 14px;
         }
+
         .node-actions {
             display: flex;
             gap: 5px;
             margin-top: 8px;
         }
+
         .node-actions button {
             padding: 4px 8px;
             font-size: 12px;
@@ -100,10 +123,11 @@
             background: white;
             border-radius: 3px;
         }
+
         .node-actions button:hover {
             background: #eee;
         }
-        
+
         /* Tooltip styling */
         .node-tooltip {
             background: transparent;
@@ -115,292 +139,527 @@
         }
     </style>
 </head>
+
 <body>
 
-<div id="map-container">
-    <div id="map"></div>
-    <div id="sidebar">
-        <div class="sidebar-header">
-            <h3 style="margin: 0; font-size: 16px;">Registered Nodes</h3>
-            <span class="sidebar-close" onclick="toggleSidebar()">✕</span>
-        </div>
-        <div class="node-list" id="nodeList">
-            <!-- Nodes dynamically injected here by JS -->
+    <div id="map-container">
+        <div id="map"></div>
+        <div id="sidebar">
+            <div class="sidebar-header">
+                <h3 style="margin: 0; font-size: 16px;">Registered Nodes</h3>
+                <span class="sidebar-close" onclick="toggleSidebar()">✕</span>
+            </div>
+            <div class="node-list" id="nodeList">
+                <!-- Nodes dynamically injected here by JS -->
+            </div>
         </div>
     </div>
-</div>
 
-<!-- Leaflet JS -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script>
-    // Initialize the map, centered globally
-    const map = L.map('map').setView([20, 0], 2);
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script>
+        // Initialize the map, centered on specific coordinates
+        const map = L.map('map', {
+            maxBounds: [
+                [-90, -180],
+                [90, 180]
+            ],
+            maxBoundsViscosity: 1.0 // Prevents dragging completely outside the bounds
+        }).setView([40.93380705586664, -8.366088867187502], 12);
 
-    // Add OpenStreetMap tiles
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '© OpenStreetMap contributors'
-    }).addTo(map);
-
-    let popup = L.popup();
-
-    // Store references to map objects for hiding/showing/updating
-    const nodeObjects = {};
-    const nodesData = [];
-    
-    // Manage state for adding vs editing
-    let currentEditEui = null;
-
-    // Function to draw a node on the map
-    function drawNode(node) {
-        // Clear existing objects for this node if they exist (for updates)
-        if (nodeObjects[node.dev_eui]) {
-            map.removeLayer(nodeObjects[node.dev_eui].marker);
-            map.removeLayer(nodeObjects[node.dev_eui].circle);
-            if (nodeObjects[node.dev_eui].tooltip) {
-                map.removeLayer(nodeObjects[node.dev_eui].tooltip);
-            }
-        }
-
-        // Draw the center dot
-        const marker = L.circleMarker([node.latitude, node.longitude], {
-            color: 'purple',
-            fillColor: 'purple',
-            fillOpacity: 1.0,
-            radius: 4
-        }).addTo(map).bindPopup(`<b>Name:</b> ${node.name || 'Unnamed'}<br><b>Device EUI:</b> ${node.dev_eui}<br><b>Range:</b> ${node.range}m`);
-
-        // Draw permanent name tooltip
-        let tooltip = null;
-        if (node.name) {
-             tooltip = marker.bindTooltip(node.name, {
-                 permanent: true, 
-                 direction: 'top',
-                 className: 'node-tooltip',
-                 offset: [0, -5]
-             });
-        }
-
-        // Draw the range circle
-        const circle = L.circle([node.latitude, node.longitude], {
-            color: 'yellow',
-            fillColor: 'yellow',
-            fillOpacity: 0.3,
-            radius: parseFloat(node.range) 
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            noWrap: true, // Stops the map tiles from repeating horizontally
+            bounds: [
+                [-90, -180],
+                [90, 180]
+            ],
+            attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        nodeObjects[node.dev_eui] = { marker, circle, tooltip, is_hidden: false };
-    }
+        let popup = L.popup();
 
-    // Render the sidebar list
-    function renderSidebar() {
-        const listDiv = document.getElementById('nodeList');
-        listDiv.innerHTML = '';
-        
-        nodesData.forEach(node => {
-            const isHidden = nodeObjects[node.dev_eui]?.is_hidden;
-            
-            const item = document.createElement('div');
-            item.className = 'node-item';
-            item.innerHTML = `
-                <h4>${node.name || 'Unnamed Node'}</h4>
-                <div style="font-size: 11px; color: #666;">EUI: ${node.dev_eui}</div>
+        // Store references to map objects for hiding/showing/updating
+        const nodeObjects = {};
+        const nodesData = [];
+        const gatewayObjects = {};
+        const gatewaysData = [];
+        const connectionLines = {};
+
+        // Manage state for adding vs editing
+        let currentEditId = null;
+        let currentEditType = null; // 'node' or 'gateway'
+
+        // Configure the map to render horizontally continuously
+        //map.options.worldCopyJump = true;
+
+        // Function to draw a node on the map
+        function drawNode(node) {
+            if (nodeObjects[node.dev_eui]) {
+                map.removeLayer(nodeObjects[node.dev_eui].marker);
+                map.removeLayer(nodeObjects[node.dev_eui].circle);
+                if (nodeObjects[node.dev_eui].tooltip) {
+                    map.removeLayer(nodeObjects[node.dev_eui].tooltip);
+                }
+            }
+
+            const marker = L.circleMarker([node.latitude, node.longitude], {
+                color: 'purple',
+                fillColor: 'purple',
+                fillOpacity: 1.0,
+                radius: 4
+            }).addTo(map).bindPopup(`<b>Node Name:</b> ${node.name || 'Unnamed'}<br><b>Device EUI:</b> ${node.dev_eui}<br><b>Range:</b> ${node.range}m`);
+
+            let tooltip = null;
+            if (node.name) {
+                tooltip = marker.bindTooltip(node.name, {
+                    permanent: true, direction: 'top', className: 'node-tooltip', offset: [0, -5]
+                });
+            }
+
+            const circle = L.circle([node.latitude, node.longitude], {
+                color: 'yellow',
+                fillColor: 'yellow',
+                fillOpacity: 0.3,
+                radius: parseFloat(node.range)
+            }).addTo(map);
+
+            nodeObjects[node.dev_eui] = { marker, circle, tooltip, is_hidden: false };
+            drawConnections(); // Redraw connections when a node is drawn/updated
+        }
+
+        // Function to draw a gateway on the map
+        function drawGateway(gw) {
+            if (gatewayObjects[gw.gateway_id]) {
+                map.removeLayer(gatewayObjects[gw.gateway_id].marker);
+                map.removeLayer(gatewayObjects[gw.gateway_id].circle);
+                if (gatewayObjects[gw.gateway_id].tooltip) {
+                    map.removeLayer(gatewayObjects[gw.gateway_id].tooltip);
+                }
+            }
+
+            const marker = L.circleMarker([gw.latitude, gw.longitude], {
+                color: 'green',
+                fillColor: 'green',
+                fillOpacity: 1.0,
+                radius: 5
+            }).addTo(map).bindPopup(`<b>Gateway Name:</b> ${gw.name || 'Unnamed'}<br><b>Gateway ID:</b> ${gw.gateway_id}<br><b>Range:</b> ${gw.range}m`);
+
+            let tooltip = null;
+            if (gw.name) {
+                tooltip = marker.bindTooltip(gw.name, {
+                    permanent: true, direction: 'top', className: 'node-tooltip', offset: [0, -5]
+                });
+            }
+
+            const circle = L.circle([gw.latitude, gw.longitude], {
+                color: 'green',
+                fillColor: 'green',
+                fillOpacity: 0.2, // translucent body
+                opacity: 1.0,    // opaque border
+                radius: parseFloat(gw.range)
+            }).addTo(map);
+
+            gatewayObjects[gw.gateway_id] = { marker, circle, tooltip, is_hidden: false };
+            drawConnections(); // Redraw connections when a gateway is drawn/updated
+        }
+
+        // Function to draw connections
+        function drawConnections() {
+            // Clear all existing connection lines
+            for (const dev_eui in connectionLines) {
+                map.removeLayer(connectionLines[dev_eui]);
+            }
+
+            nodesData.forEach(node => {
+                if (node.connected_gateway) {
+                    const gw = gatewaysData.find(g => g.gateway_id === node.connected_gateway);
+                    if (gw && nodeObjects[node.dev_eui] && gatewayObjects[gw.gateway_id]) {
+                        // Only draw if both are visible
+                        if (!nodeObjects[node.dev_eui].is_hidden && !gatewayObjects[gw.gateway_id].is_hidden) {
+                            const line = L.polyline([
+                                [node.latitude, node.longitude],
+                                [gw.latitude, gw.longitude]
+                            ], {
+                                color: 'orange',
+                                dashArray: '5, 5',
+                                weight: 2
+                            }).addTo(map);
+                            connectionLines[node.dev_eui] = line;
+                        }
+                    }
+                }
+            });
+        }
+
+        // Render the sidebar list
+        function renderSidebar() {
+            const listDiv = document.getElementById('nodeList');
+            listDiv.innerHTML = '';
+
+            // Gateways Section
+            const gwHeader = document.createElement('h3');
+            gwHeader.innerText = "Gateways";
+            gwHeader.style.marginTop = "0";
+            listDiv.appendChild(gwHeader);
+
+            gatewaysData.forEach(gw => {
+                const isHidden = gatewayObjects[gw.gateway_id]?.is_hidden;
+                const item = document.createElement('div');
+                item.className = 'node-item';
+                item.innerHTML = `
+                <h4><span style="color:green;">●</span> ${gw.name || 'Unnamed GW'}</h4>
+                <div style="font-size: 11px; color: #666;">ID: ${gw.gateway_id}</div>
                 <div class="node-actions">
-                    <button onclick="centerOnNode('${node.dev_eui}')">📍 Center</button>
-                    <button onclick="toggleNodeVisibility('${node.dev_eui}')">${isHidden ? '👁️ Show' : '🙈 Hide'}</button>
-                    <button onclick="editNode('${node.dev_eui}')">✏️ Edit</button>
+                    <button class="action-btn" onclick="centerOnItem('gateway', '${gw.gateway_id}')" title="Center on Map">📍 Center</button>
+                    <button class="action-btn" onclick="toggleVisibility('gateway', '${gw.gateway_id}')" title="Toggle Visibility">${isHidden ? '👁️ Show' : '🙈 Hide'}</button>
+                    <button class="action-btn" onclick="editItem('gateway', '${gw.gateway_id}')" title="Edit Gateway">✏️ Edit</button>
+                    <button class="action-btn" onclick="deleteItem('gateway', '${gw.gateway_id}')" style="color: darkred;" title="Delete Gateway">🗑️ Delete</button>
                 </div>
             `;
-            listDiv.appendChild(item);
-        });
-    }
+                listDiv.appendChild(item);
+            });
 
-    // Sidebar action functions
-    window.centerOnNode = function(dev_eui) {
-        const node = nodesData.find(n => n.dev_eui === dev_eui);
-        if(node) {
-            map.flyTo([node.latitude, node.longitude], 15);
+            // Nodes Section
+            const nodeHeader = document.createElement('h3');
+            nodeHeader.innerText = "Nodes";
+            nodeHeader.style.marginTop = "20px";
+            listDiv.appendChild(nodeHeader);
+
+            nodesData.forEach(node => {
+                const isHidden = nodeObjects[node.dev_eui]?.is_hidden;
+                const connectedTo = node.connected_gateway ? `Connected: ${node.connected_gateway.substring(0, 8)}...` : 'Disconnected';
+                const item = document.createElement('div');
+                item.className = 'node-item';
+                item.innerHTML = `
+                <h4><span style="color:purple;">●</span> ${node.name || 'Unnamed Node'}</h4>
+                <div style="font-size: 11px; color: #666;">EUI: ${node.dev_eui}<br/>${connectedTo}</div>
+                <div class="node-actions">
+                    <button class="action-btn" onclick="centerOnItem('node', '${node.dev_eui}')" title="Center on Map">📍 Center</button>
+                    <button class="action-btn" onclick="toggleVisibility('node', '${node.dev_eui}')" title="Toggle Visibility">${isHidden ? '👁️ Show' : '🙈 Hide'}</button>
+                    <button class="action-btn" onclick="editItem('node', '${node.dev_eui}')" title="Edit Node">✏️ Edit</button>
+                    <button class="action-btn" onclick="deleteItem('node', '${node.dev_eui}')" style="color: darkred;" title="Delete Node">🗑️ Delete</button>
+                </div>
+            `;
+                listDiv.appendChild(item);
+            });
         }
-    };
 
-    window.toggleNodeVisibility = function(dev_eui) {
-        const objs = nodeObjects[dev_eui];
-        if(!objs) return;
-        
-        if(objs.is_hidden) {
-            objs.marker.addTo(map);
-            objs.circle.addTo(map);
-            objs.is_hidden = false;
-        } else {
-            map.removeLayer(objs.marker);
-            map.removeLayer(objs.circle);
-            objs.is_hidden = true;
-        }
-        renderSidebar();
-    };
-
-    window.editNode = function(dev_eui) {
-        const node = nodesData.find(n => n.dev_eui === dev_eui);
-        if(!node) return;
-        
-        currentEditEui = dev_eui;
-        // Open a popup to edit at its current location
-        openFormPopup(node.latitude, node.longitude, node);
-        
-        alert("Edit mode active. You can fill out the form, or click anywhere else on the map to move it.");
-    };
-
-    function toggleSidebar() {
-        document.getElementById('sidebar').classList.toggle('open');
-    }
-
-    // Fetch existing nodes from the API and draw them
-    fetch('/nodes')
-        .then(response => response.json())
-        .then(nodes => {
-            if(Array.isArray(nodes)) {
-                nodes.forEach(node => {
-                    nodesData.push(node);
-                    drawNode(node);
-                });
-                renderSidebar();
+        // Sidebar action functions
+        window.centerOnItem = function (type, id) {
+            const item = type === 'node' ? nodesData.find(n => n.dev_eui === id) : gatewaysData.find(g => g.gateway_id === id);
+            if (item) {
+                map.flyTo([item.latitude, item.longitude], 15);
             }
-        })
-        .catch(err => console.error("Error fetching nodes:", err));
+        };
 
-    function openFormPopup(lat, lng, editNodeData = null) {
-        const isEdit = editNodeData !== null;
-        const defaultEui = isEdit ? editNodeData.dev_eui : '';
-        const defaultName = isEdit ? (editNodeData.name || '') : '';
-        const defaultRange = isEdit ? editNodeData.range : '';
-        const defaultAltitude = isEdit ? (editNodeData.altitude || 0) : 0;
-        
-        const popupContent = `
+        window.toggleVisibility = function (type, id) {
+            const objs = type === 'node' ? nodeObjects[id] : gatewayObjects[id];
+            if (!objs) return;
+
+            if (objs.is_hidden) {
+                objs.marker.addTo(map);
+                objs.circle.addTo(map);
+                objs.is_hidden = false;
+            } else {
+                map.removeLayer(objs.marker);
+                map.removeLayer(objs.circle);
+                objs.is_hidden = true;
+            }
+            drawConnections(); // Need to redraw connections to show/hide the lines too
+            renderSidebar();
+        };
+
+        window.editItem = function (type, id) {
+            const item = type === 'node' ? nodesData.find(n => n.dev_eui === id) : gatewaysData.find(g => g.gateway_id === id);
+            if (!item) return;
+
+            currentEditId = id;
+            currentEditType = type;
+            // Open a popup to edit at its current location
+            openFormPopup(item.latitude, item.longitude, item, type);
+
+            alert("Edit mode active. You can fill out the form, or click anywhere else on the map to move it.");
+        };
+
+        window.deleteItem = function(type, id) {
+            const item = type === 'node' ? nodesData.find(n => n.dev_eui === id) : gatewaysData.find(g => g.gateway_id === id);
+            if(!item) return;
+
+            const displayName = item.name || (type === 'node' ? item.dev_eui : item.gateway_id);
+            const confirmation = window.confirm(`Are you sure you want to delete ${type === 'node' ? 'Node' : 'Gateway'} "${displayName}"?`);
+            
+            if (confirmation) {
+                const endpoint = type === 'node' ? `/nodes/${id}` : `/gateways/${id}`;
+                fetch(endpoint, {
+                    method: 'DELETE'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if(data.status === 'ok') {
+                        // Remove from local arrays
+                        if (type === 'node') {
+                            const idx = nodesData.findIndex(n => n.dev_eui === id);
+                            if(idx !== -1) nodesData.splice(idx, 1);
+                            // Remove from map visually
+                            if(nodeObjects[id]) {
+                                map.removeLayer(nodeObjects[id].marker);
+                                map.removeLayer(nodeObjects[id].circle);
+                                if(nodeObjects[id].tooltip) map.removeLayer(nodeObjects[id].tooltip);
+                                delete nodeObjects[id];
+                            }
+                        } else {
+                            const idx = gatewaysData.findIndex(n => n.gateway_id === id);
+                            if(idx !== -1) gatewaysData.splice(idx, 1);
+                            // Remove from map visually
+                            if(gatewayObjects[id]) {
+                                map.removeLayer(gatewayObjects[id].marker);
+                                map.removeLayer(gatewayObjects[id].circle);
+                                if(gatewayObjects[id].tooltip) map.removeLayer(gatewayObjects[id].tooltip);
+                                delete gatewayObjects[id];
+                            }
+                        }
+                        
+                        // Re-render and re-fetch to fix lines
+                        renderSidebar();
+                        refreshConnections();
+                    } else {
+                        alert(`Failed to delete ${type}: ` + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error(`Error deleting ${type}:`, error);
+                    alert("An error occurred. Check the console.");
+                });
+            }
+        };
+
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('open');
+        }
+
+        let fetchedNodes = false;
+        let fetchedGateways = false;
+
+        function checkRenderSidebar() {
+            if (fetchedNodes && fetchedGateways) {
+                renderSidebar();
+                drawConnections();
+            }
+        }
+
+        // Fetch existing gateways
+        fetch('/gateways')
+            .then(response => response.json())
+            .then(gws => {
+                if (Array.isArray(gws)) {
+                    gws.forEach(gw => {
+                        gatewaysData.push(gw);
+                        drawGateway(gw);
+                    });
+                }
+                fetchedGateways = true;
+                checkRenderSidebar();
+            })
+            .catch(err => console.error("Error fetching gateways:", err));
+
+        // Fetch existing nodes
+        fetch('/nodes')
+            .then(response => response.json())
+            .then(nodes => {
+                if (Array.isArray(nodes)) {
+                    nodes.forEach(node => {
+                        nodesData.push(node);
+                        drawNode(node);
+                    });
+                }
+                fetchedNodes = true;
+                checkRenderSidebar();
+            })
+            .catch(err => console.error("Error fetching nodes:", err));
+
+        // Refetch nodes to get updated connections
+        function refreshConnections() {
+            fetch('/nodes')
+                .then(response => response.json())
+                .then(nodes => {
+                    if (Array.isArray(nodes)) {
+                        nodesData.length = 0; // clear array perfectly
+                        nodes.forEach(node => {
+                            nodesData.push(node);
+                            drawNode(node);
+                        });
+                    }
+                    renderSidebar();
+                });
+        }
+
+        function openFormPopup(lat, lng, editData = null, forceType = null) {
+            // If not editing, allow the user to choose type by Radio button. If forceType is provided (via edit) lock the type.
+            const isEdit = editData !== null;
+            let defaultType = forceType || 'node'; // 'node' or 'gateway'
+
+            const defaultId = isEdit ? (editData.dev_eui || editData.gateway_id) : '';
+            const defaultName = isEdit ? (editData.name || '') : '';
+            const defaultRange = isEdit ? editData.range : '';
+            const defaultAltitude = isEdit ? (editData.altitude || 0) : 0;
+
+            // Radio toggle UI for new components
+            const typeSelectionUI = !isEdit ? `
+            <div style="margin-bottom: 10px;">
+                <label><input type="radio" name="itemType" value="node" checked onchange="document.getElementById('idLabel').innerText='Device EUI:'"> Node</label>
+                <label style="margin-left: 15px;"><input type="radio" name="itemType" value="gateway" onchange="document.getElementById('idLabel').innerText='Gateway ID:'"> Gateway</label>
+            </div>
+        ` : `<div style="margin-bottom: 10px; font-weight: bold; color: ${defaultType === 'node' ? 'purple' : 'green'};">${defaultType === 'node' ? 'Node' : 'Gateway'}</div>`;
+
+            const popupContent = `
             <div style="font-family: Arial, sans-serif; font-size: 14px;">
-                <h3 style="margin-top: 0;">${isEdit ? 'Edit Node' : 'Add New Node'}</h3>
+                <h3 style="margin-top: 0;">${isEdit ? 'Edit Map Item' : 'Add to Map'}</h3>
+                ${typeSelectionUI}
+
                 ${!isEdit ? `
-                <label><b>Device EUI:</b></label><br>
-                <input type="text" id="devEui" placeholder="e.g. 0011223344556677" style="width: 100%; margin-bottom: 10px;" value="${defaultEui}"><br>
-                ` : `<div style="margin-bottom: 10px;"><b>Device EUI:</b> ${defaultEui}</div>`}
+                <label><b id="idLabel">Device EUI:</b></label><br>
+                <input type="text" id="itemId" placeholder="e.g. 0011223344556677" style="width: 100%; margin-bottom: 10px;" value="${defaultId}"><br>
+                ` : `<div style="margin-bottom: 10px;"><b>ID:</b> ${defaultId}</div>`}
                 
                 <label><b>Name:</b></label><br>
-                <input type="text" id="nodeName" placeholder="e.g. Campus Roof" style="width: 100%; margin-bottom: 10px;" value="${defaultName}"><br>
+                <input type="text" id="itemName" placeholder="e.g. Campus Roof" style="width: 100%; margin-bottom: 10px;" value="${defaultName}"><br>
                 
                 <label><b>Range (meters):</b></label><br>
-                <input type="number" id="nodeRange" placeholder="e.g. 5000" style="width: 100%; margin-bottom: 10px;" value="${defaultRange}"><br>
+                <input type="number" id="itemRange" placeholder="e.g. 5000" style="width: 100%; margin-bottom: 10px;" value="${defaultRange}"><br>
 
                 <label><b>Altitude (meters, optional):</b></label><br>
-                <input type="number" id="nodeAltitude" placeholder="e.g. 10" style="width: 100%; margin-bottom: 15px;" value="${defaultAltitude}"><br>
+                <input type="number" id="itemAltitude" placeholder="e.g. 10" style="width: 100%; margin-bottom: 15px;" value="${defaultAltitude}"><br>
                 
-                <button id="saveNodeBtn" style="padding: 5px 10px; cursor: pointer;">${isEdit ? 'Save Changes' : 'Save Node'}</button>
-                ${isEdit ? `<button onclick="window.currentEditEui = null; map.closePopup();" style="padding: 5px 10px; cursor: pointer; float:right;">Cancel</button>` : ''}
+                <button id="saveItemBtn" style="padding: 5px 10px; cursor: pointer;">${isEdit ? 'Save Changes' : 'Save Item'}</button>
+                ${isEdit ? `<button onclick="window.currentEditId = null; window.currentEditType = null; map.closePopup();" style="padding: 5px 10px; cursor: pointer; float:right;">Cancel</button>` : ''}
             </div>
         `;
 
-        const popup = L.popup()
-            .setLatLng([lat, lng])
-            .setContent(popupContent)
-            .openOn(map);
+            const popup = L.popup()
+                .setLatLng([lat, lng])
+                .setContent(popupContent)
+                .openOn(map);
 
-        // Add event listener to the save button inside the popup
-        setTimeout(() => {
-            const btn = document.getElementById('saveNodeBtn');
-            if (btn) {
-                btn.addEventListener('click', () => {
-                    const devEui = isEdit ? editNodeData.dev_eui : document.getElementById('devEui').value;
-                    const name = document.getElementById('nodeName').value;
-                    const range = document.getElementById('nodeRange').value;
-                    const altitude = document.getElementById('nodeAltitude').value || 0;
-
-                    if (!devEui || !range) {
-                        alert("Device EUI and Range are required!");
-                        return;
-                    }
-
-                    const payload = {
-                        dev_eui: devEui,
-                        name: name,
-                        latitude: lat,
-                        longitude: lng,
-                        altitude: parseFloat(altitude), 
-                        range: range
-                    };
-
-                    const endpoint = isEdit ? `/nodes/${devEui}` : '/nodes';
-                    const method = isEdit ? 'PUT' : 'POST';
-
-                    fetch(endpoint, {
-                        method: method,
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(payload)
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if(data.status === 'ok') {
-                            if(isEdit) {
-                                // Update existing
-                                const idx = nodesData.findIndex(n => n.dev_eui === devEui);
-                                if(idx !== -1) nodesData[idx] = payload;
-                                currentEditEui = null;
-                            } else {
-                                // Push new
-                                nodesData.push(payload);
-                            }
-                            drawNode(payload);
-                            renderSidebar();
-                            map.closePopup();
-                        } else {
-                            alert(`Failed to ${isEdit ? 'update' : 'add'} node: ` + data.message);
+            setTimeout(() => {
+                const btn = document.getElementById('saveItemBtn');
+                if (btn) {
+                    btn.addEventListener('click', () => {
+                        let type = defaultType;
+                        if (!isEdit) {
+                            const selector = document.querySelector('input[name="itemType"]:checked');
+                            if (selector) type = selector.value;
                         }
-                    })
-                    .catch(error => {
-                        console.error(`Error saving node:`, error);
-                        alert("An error occurred. Check the console.");
+
+                        const idVal = isEdit ? defaultId : document.getElementById('itemId').value;
+                        const name = document.getElementById('itemName').value;
+                        const range = document.getElementById('itemRange').value;
+                        const altitude = document.getElementById('itemAltitude').value || 0;
+
+                        if (!idVal || !range) {
+                            alert("ID and Range are required!");
+                            return;
+                        }
+
+                        const payload = {
+                            name: name,
+                            latitude: lat,
+                            longitude: lng,
+                            altitude: parseFloat(altitude),
+                            range: range
+                        };
+
+                        if (type === 'node') payload.dev_eui = idVal;
+                        if (type === 'gateway') payload.gateway_id = idVal;
+
+                        const endpoint = type === 'node' ? (isEdit ? `/nodes/${idVal}` : '/nodes') : (isEdit ? `/gateways/${idVal}` : '/gateways');
+                        const method = isEdit ? 'PUT' : 'POST';
+
+                        fetch(endpoint, {
+                            method: method,
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(payload)
+                        })
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.status === 'ok') {
+                                    if (isEdit) {
+                                        // Update existing
+                                        const arr = type === 'node' ? nodesData : gatewaysData;
+                                        const key = type === 'node' ? 'dev_eui' : 'gateway_id';
+                                        const idx = arr.findIndex(n => n[key] === idVal);
+                                        if (idx !== -1) arr[idx] = payload;
+                                        currentEditId = null;
+                                        currentEditType = null;
+                                    } else {
+                                        // Push new
+                                        if (type === 'node') nodesData.push(payload);
+                                        if (type === 'gateway') gatewaysData.push(payload);
+                                    }
+
+                                    // Re-fetch nodes to sync connected_gateway values cleanly since DB calculates it automatically
+                                    refreshConnections();
+
+                                    if (type === 'gateway' && !isEdit) drawGateway(payload);
+
+                                    map.closePopup();
+                                } else {
+                                    alert(`Failed to ${isEdit ? 'update' : 'add'} ${type}: ` + data.message);
+                                }
+                            })
+                            .catch(error => {
+                                console.error(`Error saving ${type}:`, error);
+                                alert("An error occurred. Check the console.");
+                            });
                     });
-                });
-            }
-        }, 100);
-    }
-
-    // Add click event to map to place/move a node
-    map.on('click', function(e) {
-        const lat = e.latlng.lat;
-        const lng = e.latlng.lng;
-        
-        if(currentEditEui) {
-            // We are moving an existing node
-            const node = nodesData.find(n => n.dev_eui === currentEditEui);
-            openFormPopup(lat, lng, node);
-        } else {
-            // Adding a brand new node
-            openFormPopup(lat, lng, null);
+                }
+            }, 100);
         }
-    });
 
-    // --- User Geolocation Feature --- Removed
+        // Add click event to map to place/move a node or gateway
+        map.on('click', function (e) {
+            const lat = e.latlng.lat;
+            const lng = e.latlng.lng;
 
-    // Add sidebar toggle control button
-    L.Control.SidebarToggle = L.Control.extend({
-        options: {
-            position: 'topright'
-        },
-        onAdd: function(map) {
-            const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-sidebar-toggle');
-            container.innerHTML = '☰'; // Hamburger menu icon
-            container.title = "Toggle Nodes Sidebar";
-
-            container.onclick = function(e) {
-                e.stopPropagation();
-                toggleSidebar();
+            if (currentEditId !== null && currentEditType !== null) {
+                // We are moving an existing item
+                const item = currentEditType === 'node'
+                    ? nodesData.find(n => n.dev_eui === currentEditId)
+                    : gatewaysData.find(g => g.gateway_id === currentEditId);
+                openFormPopup(lat, lng, item, currentEditType);
+            } else {
+                // Adding a brand new item
+                openFormPopup(lat, lng, null, null);
             }
-            return container;
-        }
-    });
-    
-    map.addControl(new L.Control.SidebarToggle());
+        });
 
-</script>
+        // --- User Geolocation Feature --- Removed
+
+        // Add sidebar toggle control button
+        L.Control.SidebarToggle = L.Control.extend({
+            options: {
+                position: 'topright'
+            },
+            onAdd: function (map) {
+                const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-sidebar-toggle');
+                container.innerHTML = '☰'; // Hamburger menu icon
+                container.title = "Toggle Nodes Sidebar";
+
+                container.onclick = function (e) {
+                    e.stopPropagation();
+                    toggleSidebar();
+                }
+                return container;
+            }
+        });
+
+        map.addControl(new L.Control.SidebarToggle());
+
+    </script>
 </body>
+
 </html>
