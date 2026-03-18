@@ -187,17 +187,29 @@ def uplink():
     if event != "up":
         return jsonify({"status": "ignored", "event": event}), 200
 
-    data = request.get_json()
+    try:
+        data = request.get_json()
+    except Exception as e:
+        app.logger.error(f"Failed to parse JSON: {e}")
+        return jsonify({"status": "error", "message": "Invalid JSON"}), 400
 
     # LoRaWAN metadata
     dev_eui   = data.get("deviceInfo", {}).get("devEui")
     timestamp = data.get("time")                        # network-server reception time
 
     # Decoded payload (populated by decoder.js in TTN/Chirpstack)
-    decoded        = data.get("object", {})
-    type_code      = decoded.get("type_code")           # raw number — you decode it later
-    azimuth        = decoded.get("azimuth")
-    node_timestamp = decoded.get("secs_since_midnight")
+    decoded = data.get("object", {})
+
+    # Extract the array of detections. Depending on how ChirpStack wraps it, 
+    # detections might be inside 'data' or directly in 'object'
+    if "data" in decoded and isinstance(decoded["data"], dict) and "detections" in decoded["data"]:
+        detections = decoded["data"].get("detections", [])
+    else:
+        detections = decoded.get("detections", [])
+
+    if not detections:
+        app.logger.warning(f"No detections found in uplink or payload could not be decoded. Object: {decoded}")
+        return jsonify({"status": "ok", "message": "No detections to process"}), 200
 
     # Gateway radio stats (first gateway wins)
     rx_info = data.get("rxInfo", [])
@@ -206,31 +218,44 @@ def uplink():
         rssi = rx_info[0].get("rssi")
         snr  = rx_info[0].get("snr")
 
+    # Prepare batch data
+    insert_values = []
+    for det in detections:
+        type_code = det.get("type_code")
+        azimuth = det.get("azimuth")
+        node_timestamp = det.get("secs_since_midnight")
+        
+        insert_values.append((dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr))
+
     cursor, conn = None, None
     try:
         cursor, conn = connect_to_database()
         if not conn or not cursor:
             return jsonify({"status": "error", "message": "Database connection failed"}), 500
 
-        cursor.execute(
-            """
+        # Use execute_values for efficient bulk insert
+        insert_query = """
             INSERT INTO detections
                 (dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """,
-            (dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr)
-        )
+            VALUES %s
+        """
+        execute_values(cursor, insert_query, insert_values)
         conn.commit()
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        app.logger.error(f"Database error during bulk insert: {e.pgerror or e}")
+        return jsonify({"status": "error", "message": "Database communication error"}), 500
     except Exception as e:
         if conn:
             conn.rollback()
-        app.logger.error(f"DB insert failed, rolled back: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        app.logger.error(f"Unexpected error during bulk insert: {e}")
+        return jsonify({"status": "error", "message": "Unexpected server error"}), 500
     finally:
         if cursor and conn:
             close_db_connection(cursor, conn)
 
-    return jsonify({"status": "ok"}), 200
+    return jsonify({"status": "ok", "inserted": len(insert_values)}), 200
 
 # ---------------------------------------------------------
 # Gateway Endpoints
