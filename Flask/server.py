@@ -1,24 +1,10 @@
+from flask import Flask, request, jsonify, render_template
 import psycopg2
 from psycopg2.extras import execute_values
 import os
-from flask import Flask, request, jsonify, render_template
 from database import connect_to_database, close_db_connection
 
-# ===== NEW IMPORTS =====
-import math
-import numpy as np
-from threading import Lock
-from flask_socketio import SocketIO
-
 app = Flask(__name__)
-
-# ===== NEW SOCKET =====
-socketio = SocketIO(app, cors_allowed_origins="*")
-
-# ===== NEW GLOBAL STATE =====
-nodes_cache = {}
-latest_detections = {}
-lock = Lock()
 
 @app.route("/", methods=["GET"])
 def index():
@@ -38,34 +24,11 @@ def index():
 def map_view():
     return render_template("map.html")
 
-# ===== NEW CACHE LOADER =====
-def load_nodes_cache():
-    cursor, conn = None, None
-    global nodes_cache
-    try:
-        cursor, conn = connect_to_database()
-        if not conn or not cursor:
-            return
-
-        cursor.execute("SELECT dev_eui, latitude, longitude, range FROM nodes")
-        rows = cursor.fetchall()
-
-        nodes_cache = {
-            row[0]: {
-                "lat": row[1],
-                "lon": row[2],
-                "range": row[3]
-            }
-            for row in rows
-        }
-
-    except Exception as e:
-        app.logger.error(f"Error loading node cache: {e}")
-    finally:
-        if cursor and conn:
-            close_db_connection(cursor, conn)
-
 def update_node_connections(cursor):
+    """
+    Updates all nodes to link them to the nearest gateway using Euclidean distance.
+    This runs efficiently in Postgres without requiring PostGIS.
+    """
     cursor.execute("""
         UPDATE nodes n
         SET connected_gateway = (
@@ -75,39 +38,6 @@ def update_node_connections(cursor):
             LIMIT 1
         )
     """)
-
-# ===== GEOMETRY =====
-def azimuth_to_vector(azimuth_deg):
-    theta = math.radians(azimuth_deg)
-    return math.sin(theta), math.cos(theta)
-
-def latlon_to_xy(lat, lon, ref_lat):
-    R = 6371000
-    x = math.radians(lon) * R * math.cos(math.radians(ref_lat))
-    y = math.radians(lat) * R
-    return x, y
-
-def xy_to_latlon(x, y, ref_lat):
-    R = 6371000
-    lat = math.degrees(y / R)
-    lon = math.degrees(x / (R * math.cos(math.radians(ref_lat))))
-    return lat, lon
-
-def estimate_position(lines):
-    A, b = [], []
-    for x0, y0, dx, dy in lines:
-        A.append([dy, -dx])
-        b.append(dy * x0 - dx * y0)
-
-    A = np.array(A)
-    b = np.array(b)
-
-    pos, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
-    return pos
-
-# =========================================================
-# NODES
-# =========================================================
 
 @app.route("/nodes", methods=["GET"])
 def get_nodes():
@@ -169,8 +99,6 @@ def create_node():
         )
         update_node_connections(cursor)
         conn.commit()
-        load_nodes_cache()
-
     except Exception as e:
         if conn:
             conn.rollback()
@@ -214,8 +142,6 @@ def update_node(dev_eui):
             
         update_node_connections(cursor)
         conn.commit()
-        load_nodes_cache()
-
     except Exception as e:
         if conn:
             conn.rollback()
@@ -242,8 +168,6 @@ def delete_node(dev_eui):
             
         update_node_connections(cursor)
         conn.commit()
-        load_nodes_cache()
-
     except Exception as e:
         if conn:
             conn.rollback()
@@ -255,12 +179,10 @@ def delete_node(dev_eui):
 
     return jsonify({"status": "ok"}), 200
 
-# =========================================================
-# UPLINK (FULL + REALTIME)
-# =========================================================
-
 @app.route("/uplink", methods=["POST"])
 def uplink():
+    # ChirpStack sends all event types (up, status, join, ack, txack, log, location)
+    # to the same URL. We only care about uplink data events.
     event = request.args.get("event")
     if event != "up":
         return jsonify({"status": "ignored", "event": event}), 200
@@ -271,26 +193,39 @@ def uplink():
         app.logger.error(f"Failed to parse JSON: {e}")
         return jsonify({"status": "error", "message": "Invalid JSON"}), 400
 
-    dev_eui = data.get("deviceInfo", {}).get("devEui")
-    timestamp = data.get("time")
+    # LoRaWAN metadata
+    dev_eui   = data.get("deviceInfo", {}).get("devEui")
+    timestamp = data.get("time")                        # network-server reception time
 
+    # Decoded payload (populated by decoder.js in TTN/Chirpstack)
     decoded = data.get("object", {})
-    detections = decoded.get("detections", [])
+
+    # Extract the array of detections. Depending on how ChirpStack wraps it, 
+    # detections might be inside 'data' or directly in 'object'
+    if "data" in decoded and isinstance(decoded["data"], dict) and "detections" in decoded["data"]:
+        detections = decoded["data"].get("detections", [])
+    else:
+        detections = decoded.get("detections", [])
 
     if not detections:
+        app.logger.warning(f"No detections found in uplink or payload could not be decoded. Object: {decoded}")
         return jsonify({"status": "ok", "message": "No detections to process"}), 200
 
+    # Gateway radio stats (first gateway wins)
+    rx_info = data.get("rxInfo", [])
+    rssi = snr = None
+    if rx_info:
+        rssi = rx_info[0].get("rssi")
+        snr  = rx_info[0].get("snr")
+
+    # Prepare batch data
     insert_values = []
     for det in detections:
-        insert_values.append((
-            dev_eui,
-            timestamp,
-            det.get("type_code"),
-            det.get("azimuth"),
-            det.get("secs_since_midnight"),
-            None,
-            None
-        ))
+        type_code = det.get("type_code")
+        azimuth = det.get("azimuth")
+        node_timestamp = det.get("secs_since_midnight")
+        
+        insert_values.append((dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr))
 
     cursor, conn = None, None
     try:
@@ -298,84 +233,172 @@ def uplink():
         if not conn or not cursor:
             return jsonify({"status": "error", "message": "Database connection failed"}), 500
 
-        execute_values(cursor, """
+        # Use execute_values for efficient bulk insert
+        insert_query = """
             INSERT INTO detections
-            (dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr)
+                (dev_eui, timestamp, type_code, azimuth, node_timestamp, rssi, snr)
             VALUES %s
-        """, insert_values)
-
+        """
+        execute_values(cursor, insert_query, insert_values)
         conn.commit()
-
-        # ===== REAL-TIME =====
-        results = []
-
-        with lock:
-            for det in detections:
-                key = (det.get("type_code"), int(det.get("secs_since_midnight", 0)//2))
-                latest_detections.setdefault(key, []).append((dev_eui, det.get("azimuth")))
-
-            if nodes_cache:
-                ref_lat = list(nodes_cache.values())[0]["lat"]
-
-                for (type_code, _), group in latest_detections.items():
-                    if len(group) < 2:
-                        continue
-
-                    lines = []
-                    node_positions = []
-
-                    for dev, az in group:
-                        node = nodes_cache.get(dev)
-                        if not node:
-                            continue
-
-                        x, y = latlon_to_xy(node["lat"], node["lon"], ref_lat)
-                        dx, dy = azimuth_to_vector(az)
-
-                        lines.append((x, y, dx, dy))
-                        node_positions.append({
-                            "dev_eui": dev,
-                            "lat": node["lat"],
-                            "lon": node["lon"]
-                        })
-
-                    if len(lines) < 2:
-                        continue
-
-                    tx, ty = estimate_position(lines)
-                    lat, lon = xy_to_latlon(tx, ty, ref_lat)
-
-                    results.append({
-                        "type": type_code,
-                        "target": {"latitude": lat, "longitude": lon},
-                        "nodes": node_positions
-                    })
-
-        if results:
-            socketio.emit("new_estimate", results)
-
     except psycopg2.Error as e:
         if conn:
             conn.rollback()
-        app.logger.error(f"Database error during bulk insert: {e}")
+        app.logger.error(f"Database error during bulk insert: {e.pgerror or e}")
         return jsonify({"status": "error", "message": "Database communication error"}), 500
-
     except Exception as e:
         if conn:
             conn.rollback()
         app.logger.error(f"Unexpected error during bulk insert: {e}")
         return jsonify({"status": "error", "message": "Unexpected server error"}), 500
-
     finally:
         if cursor and conn:
             close_db_connection(cursor, conn)
 
     return jsonify({"status": "ok", "inserted": len(insert_values)}), 200
 
-# =========================================================
-# RUN
-# =========================================================
+# ---------------------------------------------------------
+# Gateway Endpoints
+# ---------------------------------------------------------
+
+@app.route("/gateways", methods=["GET"])
+def get_gateways():
+    cursor, conn = None, None
+    try:
+        cursor, conn = connect_to_database()
+        if not conn or not cursor:
+            return jsonify({"status": "error", "message": "Database connection failed"}), 500
+
+        cursor.execute("SELECT gateway_id, name, latitude, longitude, altitude, range FROM gateways")
+        rows = cursor.fetchall()
+        
+        gateways = []
+        for row in rows:
+            gateways.append({
+                "gateway_id": row[0],
+                "name": row[1],
+                "latitude": row[2],
+                "longitude": row[3],
+                "altitude": row[4],
+                "range": row[5]
+            })
+        return jsonify(gateways), 200
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        app.logger.error(f"Error fetching gateways: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor and conn:
+            close_db_connection(cursor, conn)
+
+@app.route("/gateways", methods=["POST"])
+def create_gateway():
+    data = request.get_json()
+    gateway_id = data.get("gateway_id")
+    name = data.get("name")
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    altitude = data.get("altitude", 0)
+    gateway_range = data.get("range")
+
+    if not all([gateway_id, latitude, longitude, gateway_range]):
+         return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+    cursor, conn = None, None
+    try:
+        cursor, conn = connect_to_database()
+        if not conn or not cursor:
+            return jsonify({"status": "error", "message": "Database connection failed"}), 500
+
+        cursor.execute(
+            """
+            INSERT INTO gateways (gateway_id, name, latitude, longitude, altitude, range)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (gateway_id, name, latitude, longitude, altitude, gateway_range)
+        )
+        update_node_connections(cursor)
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        app.logger.error(f"DB insert failed, rolled back: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor and conn:
+            close_db_connection(cursor, conn)
+
+    return jsonify({"status": "ok"}), 201
+
+@app.route("/gateways/<gateway_id>", methods=["PUT"])
+def update_gateway(gateway_id):
+    data = request.get_json()
+    name = data.get("name")
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    altitude = data.get("altitude", 0)
+    gateway_range = data.get("range")
+
+    if not all([latitude, longitude, gateway_range]):
+         return jsonify({"status": "error", "message": "Missing required fields"}), 400
+
+    cursor, conn = None, None
+    try:
+        cursor, conn = connect_to_database()
+        if not conn or not cursor:
+            return jsonify({"status": "error", "message": "Database connection failed"}), 500
+
+        cursor.execute(
+            """
+            UPDATE gateways 
+            SET name=%s, latitude=%s, longitude=%s, altitude=%s, range=%s
+            WHERE gateway_id=%s
+            """,
+            (name, latitude, longitude, altitude, gateway_range, gateway_id)
+        )
+        
+        if cursor.rowcount == 0:
+            return jsonify({"status": "error", "message": "Gateway not found"}), 404
+            
+        update_node_connections(cursor)
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        app.logger.error(f"DB update failed, rolled back: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor and conn:
+            close_db_connection(cursor, conn)
+
+    return jsonify({"status": "ok"}), 200
+
+@app.route("/gateways/<gateway_id>", methods=["DELETE"])
+def delete_gateway(gateway_id):
+    cursor, conn = None, None
+    try:
+        cursor, conn = connect_to_database()
+        if not conn or not cursor:
+            return jsonify({"status": "error", "message": "Database connection failed"}), 500
+
+        cursor.execute("DELETE FROM gateways WHERE gateway_id=%s", (gateway_id,))
+        
+        if cursor.rowcount == 0:
+            return jsonify({"status": "error", "message": "Gateway not found"}), 404
+            
+        update_node_connections(cursor)
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        app.logger.error(f"DB delete failed, rolled back: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor and conn:
+            close_db_connection(cursor, conn)
+
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == "__main__":
-    load_nodes_cache()
-    socketio.run(app, host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000)

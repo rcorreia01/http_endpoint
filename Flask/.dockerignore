@@ -31,3 +31,4 @@ docker-compose.yml
 # Docs
 README.md
 config.yaml
+/support
